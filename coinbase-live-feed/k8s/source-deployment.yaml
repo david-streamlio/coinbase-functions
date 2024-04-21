@@ -1,0 +1,41 @@
+apiVersion: compute.functionmesh.io/v1alpha1
+kind: Source
+metadata:
+  name: coinbase-live-feed
+spec:
+  image: localhost:32000/coinbase-live-feed:1.0.0
+  className: io.streamnative.data.feeds.realtime.coinbase.WebSocketSource
+  tenant: public
+  namespace: default
+  clusterName: test-pulsar
+  replicas: 1
+  maxReplicas: 2
+  sourceConfig:
+    websocketURI : "wss://ws-feed.exchange.coinbase.com"
+    subscription: "{ \"type\": \"subscribe\", \"channels\": [
+      { \"name\": \"heartbeat\", \"product_ids\": [ \"ETH-EUR\" ] } ] }"
+  output:
+    topic: persistent://public/default/coinbase-livefeed
+    typeClassName: java.lang.String
+  resources:
+    requests:
+      cpu: "0.3"
+      memory: 1G
+    limits:
+      cpu: "0.5"
+      memory: 1.1G
+  pulsar:
+    pulsarConfig: "pulsar"
+  java:
+    jar: /pulsar/coinbase-live-feed-1.0.0.jar
+    # use "" to read jar from local file system
+    jarLocation: ""
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pulsar
+data:
+  webServiceURL: http://10.152.183.143:8080
+  brokerServiceURL: pulsar://10.152.183.143:6650
