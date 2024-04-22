@@ -10,12 +10,12 @@ import org.apache.pulsar.functions.api.Function;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
+import java.util.Map;
 
 public class WebsocketFeedRouter implements Function<String, Void> {
 
-    private static final String RFQ_TOPIC = "persistent://public/default/coinbase-rfq";
-    private static final String TICKER_TOPIC = "persistent://public/default/coinbase-ticker";
-    private static final String AUCTION_TOPIC = "persistent://public/default/coinbase-auction";
+    private Map<String, String> topicMap;
+
     private ObjectMapper objectMapper;
     private Logger LOG;
 
@@ -24,19 +24,25 @@ public class WebsocketFeedRouter implements Function<String, Void> {
         String feedName = ctx.getCurrentRecord().getKey().orElse("UNKNOWN");
 
         try {
+            String destTopic = this.topicMap.get(feedName);
+
             if (feedName.equalsIgnoreCase("rfq_match")) {
                 RfqMatch match = getObjectMapper().readValue(jsonString, RfqMatch.class);
-                LOG.info(String.format("Sending [%s]", match));
-                ctx.newOutputMessage(RFQ_TOPIC, Schema.JSON(RfqMatch.class))
+                LOG.info(String.format("Sending [%s] to %s", match, destTopic));
+                ctx.newOutputMessage(destTopic, Schema.JSON(RfqMatch.class))
                         .value(match)
                         .send();
             } else if (feedName.equalsIgnoreCase("ticker")) {
-                ctx.newOutputMessage(TICKER_TOPIC, Schema.JSON(Ticker.class))
-                        .value(getObjectMapper().readValue(jsonString, Ticker.class))
+                Ticker ticker = getObjectMapper().readValue(jsonString, Ticker.class);
+                LOG.info(String.format("Sending [%s] to %s", ticker, destTopic));
+                ctx.newOutputMessage(destTopic, Schema.JSON(Ticker.class))
+                        .value(ticker)
                         .send();
             } else if (feedName.equalsIgnoreCase("auction")) {
-                ctx.newOutputMessage(AUCTION_TOPIC, Schema.JSON(Auction.class))
-                        .value(getObjectMapper().readValue(jsonString, Auction.class))
+                Auction auction = getObjectMapper().readValue(jsonString, Auction.class);
+                LOG.info(String.format("Sending [%s] to %s", auction, destTopic));
+                ctx.newOutputMessage(destTopic, Schema.JSON(Auction.class))
+                        .value(auction)
                         .send();
             }
         } catch (final Exception jmEx) {
@@ -51,6 +57,10 @@ public class WebsocketFeedRouter implements Function<String, Void> {
     public void initialize(Context ctx) throws Exception {
         Function.super.initialize(ctx);
         this.LOG = ctx.getLogger();
+        this.topicMap = (Map<String, String>) ctx.getUserConfigValue("TopicMap").get();
+        if (topicMap == null) {
+            throw new RuntimeException("Invalid configuration");
+        }
     }
 
     @Override
