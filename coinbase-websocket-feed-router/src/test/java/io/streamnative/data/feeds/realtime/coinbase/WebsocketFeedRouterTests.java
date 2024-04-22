@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.slf4j.Logger;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -18,12 +19,18 @@ import static org.mockito.Mockito.*;
 
 public class WebsocketFeedRouterTests {
 
+    private static final HashMap<String, String> TOPIC_MAP = new HashMap<String, String>();
+
     private WebsocketFeedRouter router = new WebsocketFeedRouter();
 
     @Mock
     private Context mockContext;
 
     private Record mockRecord;
+
+    static {
+        TOPIC_MAP.put("rfq_match", "persistent://feeds/realtime/rfq-match");
+    }
 
     @Test
     public void rfqMatchTest() throws Exception {
@@ -47,6 +54,7 @@ public class WebsocketFeedRouterTests {
 
         when(mockContext.getCurrentRecord()).thenReturn(mockRecord);
         when(mockContext.getLogger()).thenReturn(mockLogger);
+        when(mockContext.getUserConfigValue(anyString())).thenReturn(Optional.of(TOPIC_MAP));
         when(mockContext.newOutputMessage(anyString(),
                 any(Schema.class))).thenReturn(mockMessageBuilder);
 
