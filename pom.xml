@@ -59,6 +59,19 @@
 
     </dependencies>
 
+    <distributionManagement>
+        <snapshotRepository>
+            <id>github</id>
+            <name>GitHub Packages — coinbase-functions</name>
+            <url>https://maven.pkg.github.com/david-streamlio/coinbase-functions</url>
+        </snapshotRepository>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages — coinbase-functions</name>
+            <url>https://maven.pkg.github.com/david-streamlio/coinbase-functions</url>
+        </repository>
+    </distributionManagement>
+
     <build>
         <plugins>
             <plugin>
@@ -68,6 +81,20 @@
                 <configuration>
                     <source>${maven.compiler.source}</source>
                     <target>${maven.compiler.target}</target>
+                    <!--
+                      Run Lombok as an annotation processor during compile so @Data /
+                      @Getter / @Setter etc. actually emit accessor methods into the
+                      .class files. Without this, maven-compiler-plugin 3.11 + JDK 17
+                      silently skips Lombok and the resulting jars are missing all the
+                      generated members — even though Lombok is on the compile classpath.
+                    -->
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
 

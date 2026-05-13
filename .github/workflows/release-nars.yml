@@ -1,0 +1,50 @@
+name: Release NARs
+
+# On every v* tag, builds the three function NARs (coinbase-live-feed,
+# coinbase-websocket-feed-router, coinbase-volatility-tracker) and attaches them to the
+# corresponding GitHub Release. Consumer deploy scripts (e.g. Trade-Wise-app's
+# recreate.sh) curl them by URL.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build NARs and attach to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Set POM version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mvn -B versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+
+      - name: Build NARs
+        run: mvn -B -DskipTests package
+
+      - name: Stage NAR files
+        run: |
+          mkdir -p staging
+          cp coinbase-live-feed/target/coinbase-live-feed-*.nar staging/
+          cp coinbase-websocket-feed-router/target/coinbase-websocket-feed-router-*.nar staging/
+          cp coinbase-volatility-tracker/target/coinbase-volatility-tracker-*.nar staging/
+          ls -la staging/
+
+      - name: Create release + attach NARs
+        uses: softprops/action-gh-release@v2
+        with:
+          files: staging/*.nar
+          generate_release_notes: true
+          fail_on_unmatched_files: true

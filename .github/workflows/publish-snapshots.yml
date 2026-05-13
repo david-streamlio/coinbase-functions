@@ -1,0 +1,40 @@
+name: Publish snapshots
+
+# Publishes Maven SNAPSHOTs of the coinbase-functions modules to GitHub Packages on every
+# push to main. Downstream consumers (e.g. Trade-Wise-app) can resolve them from
+# https://maven.pkg.github.com/david-streamlio/coinbase-functions with a PAT that has
+# read:packages.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.java'
+      - '**/pom.xml'
+      - '.github/workflows/publish-snapshots.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: mvn deploy → GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Deploy snapshots
+        run: mvn -B -DskipTests deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
