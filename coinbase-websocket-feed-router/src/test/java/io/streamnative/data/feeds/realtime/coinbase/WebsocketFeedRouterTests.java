@@ -58,12 +58,16 @@ public class WebsocketFeedRouterTests {
         when(mockContext.newOutputMessage(anyString(),
                 any(Schema.class))).thenReturn(mockMessageBuilder);
 
+        when(mockMessageBuilder.key(anyString())).thenReturn(mockMessageBuilder);
         when(mockMessageBuilder.value(any(RfqMatch.class))).thenReturn(mockMessageBuilder);
         when(mockMessageBuilder.send()).thenReturn(mockMessageId);
         when(mockRecord.getKey()).thenReturn(Optional.of("rfq_match"));
 
         router.initialize(mockContext);
         router.process(json, mockContext);
+        // Output key is the base symbol — productId without the "-QUOTE" suffix. For the
+        // test fixture product_id="Acme Rollerskates" (no dash) the whole string is used.
+        verify(mockMessageBuilder).key("Acme Rollerskates");
         verify(mockMessageBuilder).value(match);
     }
 }
