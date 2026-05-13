@@ -59,19 +59,6 @@
 
     </dependencies>
 
-    <distributionManagement>
-        <snapshotRepository>
-            <id>github</id>
-            <name>GitHub Packages — coinbase-functions</name>
-            <url>https://maven.pkg.github.com/david-streamlio/coinbase-functions</url>
-        </snapshotRepository>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages — coinbase-functions</name>
-            <url>https://maven.pkg.github.com/david-streamlio/coinbase-functions</url>
-        </repository>
-    </distributionManagement>
-
     <build>
         <plugins>
             <plugin>
