@@ -9,8 +9,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,14 +38,28 @@ public class CoinbaseSourceTask extends SourceTask {
 
     private CoinbaseConnectorConfig config;
     private LinkedBlockingQueue<String> queue;
-    private WebSocket ws;
+    private final AtomicReference<WebSocket> ws = new AtomicReference<>();
     private HttpClient httpClient;
     /** Accumulates partial text frames — Coinbase emits batched JSON occasionally. */
     private final StringBuilder partial = new StringBuilder();
 
+    // Reconnect machinery. Coinbase's public WS sends a heartbeat every ~15s when idle but
+    // periodically closes connections that have been up for >24h (or transient network
+    // hiccups close them sooner). Kafka Connect's framework can't see this — the SourceTask
+    // stays "RUNNING" while poll() just stops returning records. We watch onClose/onError
+    // ourselves and schedule a reconnect with exponential backoff + jitter.
+    private final AtomicBoolean stopped = new AtomicBoolean(false);
+    private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
+    private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private ScheduledExecutorService reconnectExecutor;
+
+    /** Backoff schedule: 1s, 2s, 4s, 8s, 16s, then capped at 30s. Adds up to 25% jitter. */
+    private static final long INITIAL_BACKOFF_MS = 1_000;
+    private static final long MAX_BACKOFF_MS = 30_000;
+
     @Override
     public String version() {
-        return "1.1.0";
+        return "1.1.1";
     }
 
     @Override
@@ -47,17 +67,29 @@ public class CoinbaseSourceTask extends SourceTask {
         this.config = new CoinbaseConnectorConfig(props);
         this.queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
         this.httpClient = HttpClient.newHttpClient();
+        this.reconnectExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "coinbase-ws-reconnect");
+            t.setDaemon(true);
+            return t;
+        });
         connectWebSocket();
     }
 
     private void connectWebSocket() {
+        if (stopped.get()) {
+            return;
+        }
         String subscribe = buildSubscribeMessage(config.channels(), config.products());
-        LOG.info("Connecting to Coinbase WS at {} with subscribe={}", config.wsUrl(), subscribe);
+        LOG.info("Connecting to Coinbase WS at {} (attempt {})", config.wsUrl(), reconnectAttempts.get() + 1);
 
         CompletableFuture<WebSocket> wsFuture = httpClient.newWebSocketBuilder()
             .buildAsync(URI.create(config.wsUrl()), new WebSocket.Listener() {
                 @Override
                 public void onOpen(WebSocket webSocket) {
+                    LOG.info("Coinbase WS open; sending subscribe");
+                    // Reset backoff on successful open so a long-lived connection that
+                    // eventually drops gets a fast first retry instead of a long wait.
+                    reconnectAttempts.set(0);
                     webSocket.sendText(subscribe, true);
                     webSocket.request(1);
                 }
@@ -78,12 +110,53 @@ public class CoinbaseSourceTask extends SourceTask {
                 }
 
                 @Override
+                public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+                    LOG.warn("Coinbase WS closed (status={}, reason='{}'); scheduling reconnect",
+                        statusCode, reason == null ? "" : reason);
+                    scheduleReconnect();
+                    return null;
+                }
+
+                @Override
                 public void onError(WebSocket webSocket, Throwable error) {
-                    LOG.error("Coinbase WS error", error);
+                    LOG.error("Coinbase WS error; scheduling reconnect", error);
+                    scheduleReconnect();
                 }
             });
 
-        this.ws = wsFuture.join();
+        // buildAsync itself can fail (DNS, TLS, refused) — don't block forever waiting
+        // for join() to throw; let exceptionally feed back into the retry loop.
+        wsFuture.whenComplete((webSocket, throwable) -> {
+            if (throwable != null) {
+                LOG.error("Coinbase WS buildAsync failed; scheduling reconnect", throwable);
+                scheduleReconnect();
+            } else {
+                ws.set(webSocket);
+            }
+        });
+    }
+
+    /**
+     * Schedule a single reconnect with exponential backoff + jitter. Idempotent: if a
+     * reconnect is already queued, returns silently (avoids piling up attempts when
+     * both onClose AND onError fire for the same drop). After stop(), short-circuits.
+     */
+    void scheduleReconnect() {
+        if (stopped.get()) {
+            return;
+        }
+        if (!reconnectScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        int attempt = reconnectAttempts.incrementAndGet();
+        long base = Math.min(INITIAL_BACKOFF_MS * (1L << Math.min(attempt - 1, 5)), MAX_BACKOFF_MS);
+        long jitter = ThreadLocalRandom.current().nextLong(0, Math.max(1, base / 4));
+        long delayMs = base + jitter;
+        LOG.info("Coinbase WS reconnect attempt {} in {}ms", attempt, delayMs);
+        reconnectExecutor.schedule(() -> {
+            reconnectScheduled.set(false);
+            connectWebSocket();
+        }, delayMs, TimeUnit.MILLISECONDS);
     }
 
     /** Build the Coinbase WS subscribe JSON message. Mirrors what coinbase-live-feed sends. */
@@ -172,9 +245,16 @@ public class CoinbaseSourceTask extends SourceTask {
 
     @Override
     public void stop() {
-        if (ws != null) {
+        // Flip the stopped flag FIRST so any in-flight onClose/onError listeners
+        // that fire while we're tearing down don't schedule another reconnect.
+        stopped.set(true);
+        if (reconnectExecutor != null) {
+            reconnectExecutor.shutdownNow();
+        }
+        WebSocket current = ws.getAndSet(null);
+        if (current != null) {
             try {
-                ws.sendClose(WebSocket.NORMAL_CLOSURE, "task stop");
+                current.sendClose(WebSocket.NORMAL_CLOSURE, "task stop");
             } catch (Exception e) {
                 LOG.warn("Error closing WebSocket on stop", e);
             }
