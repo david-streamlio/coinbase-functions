@@ -1,9 +1,10 @@
-name: Release NARs
+name: Release artifacts
 
-# On every v* tag, builds the three function NARs (coinbase-live-feed,
-# coinbase-websocket-feed-router, coinbase-volatility-tracker) and attaches them to the
+# On every v* tag, builds the three Pulsar function NARs (coinbase-live-feed,
+# coinbase-websocket-feed-router, coinbase-volatility-tracker) AND the Kafka Connect
+# source plugin jar (coinbase-kafka-connect-source) and attaches them to the
 # corresponding GitHub Release. Consumer deploy scripts (e.g. Trade-Wise-app's
-# recreate.sh) curl them by URL.
+# recreate.sh and the Kafka Connect install-plugin.sh) curl them by URL.
 
 on:
   push:
@@ -12,7 +13,7 @@ on:
 
 jobs:
   release:
-    name: Build NARs and attach to release
+    name: Build artifacts and attach to release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,20 +32,27 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           mvn -B versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
-      - name: Build NARs
+      - name: Build artifacts
         run: mvn -B -DskipTests package
 
-      - name: Stage NAR files
+      - name: Stage release files
         run: |
           mkdir -p staging
           cp coinbase-live-feed/target/coinbase-live-feed-*.nar staging/
           cp coinbase-websocket-feed-router/target/coinbase-websocket-feed-router-*.nar staging/
           cp coinbase-volatility-tracker/target/coinbase-volatility-tracker-*.nar staging/
+          # Kafka Connect plugin is a plain (shaded) jar, not a NAR. The shade plugin
+          # produces target/<artifact>-<version>.jar after replacing the original;
+          # exclude the "original-" pre-shade jar.
+          cp coinbase-kafka-connect-source/target/coinbase-kafka-connect-source-*.jar staging/
+          rm -f staging/original-coinbase-kafka-connect-source-*.jar
           ls -la staging/
 
-      - name: Create release + attach NARs
+      - name: Create release + attach artifacts
         uses: softprops/action-gh-release@v2
         with:
-          files: staging/*.nar
+          files: |
+            staging/*.nar
+            staging/*.jar
           generate_release_notes: true
           fail_on_unmatched_files: true
