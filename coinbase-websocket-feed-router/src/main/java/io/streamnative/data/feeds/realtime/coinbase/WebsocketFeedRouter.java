@@ -21,7 +21,14 @@ public class WebsocketFeedRouter implements Function<String, Void> {
 
     @Override
     public Void process(String jsonString, Context ctx) throws Exception {
-        String feedName = ctx.getCurrentRecord().getKey().orElse("UNKNOWN");
+        // coinbase-live-feed (the upstream source) emits the channel name as a Pulsar
+        // message property `type` (e.g. "ticker", "auction", "rfq_match"), not as the
+        // message key. Prefer the property; fall back to the key for producers that
+        // happen to set it that way.
+        Map<String, String> props = ctx.getCurrentRecord().getProperties();
+        String feedName = (props != null && props.get("type") != null)
+                ? props.get("type")
+                : ctx.getCurrentRecord().getKey().orElse("UNKNOWN");
 
         try {
             String destTopic = this.topicMap.get(feedName);
