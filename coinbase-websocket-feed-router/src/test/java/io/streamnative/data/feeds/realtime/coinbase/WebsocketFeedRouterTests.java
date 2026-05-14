@@ -1,6 +1,5 @@
 package io.streamnative.data.feeds.realtime.coinbase;
 
-import io.streamnative.data.feeds.realtime.coinbase.channels.RfqMatch;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.TypedMessageBuilder;
@@ -10,11 +9,11 @@ import org.junit.Test;
 import org.mockito.Mock;
 import org.slf4j.Logger;
 
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 public class WebsocketFeedRouterTests {
@@ -34,17 +33,11 @@ public class WebsocketFeedRouterTests {
 
     @Test
     public void rfqMatchTest() throws Exception {
-        String json = "{\"maker_order_id\":\"maker\",\"taker_order_id\":\"taker\",\"side\":\"sell\",\"size\":12.345,\"price\":678.9,\"product_id\":\"Acme Rollerskates\",\"time\":\"2024-03-28T21:32:46.123000Z\"}";
-
-        RfqMatch match = new RfqMatch();
-        match.setSize(12.345d);
-        match.setPrice(678.90d);
-        match.setSide("sell");
-        match.setTime(LocalDateTime.of(2024, 3, 28, 21, 32, 46, 123000000));
-        match.setProduct_id("Acme Rollerskates");
-        match.setMaker_order_id("maker");
-        match.setTaker_order_id("taker");
-
+        // product_id has the standard BASE-QUOTE form so we also verify the base-symbol
+        // extraction (BTC-USD → BTC). The router parses the JSON just to read product_id
+        // for the message key; the output body is the original jsonString verbatim under
+        // Schema.STRING.
+        String json = "{\"maker_order_id\":\"maker\",\"taker_order_id\":\"taker\",\"side\":\"sell\",\"size\":12.345,\"price\":678.9,\"product_id\":\"BTC-USD\",\"time\":\"2024-03-28T21:32:46.123000Z\"}";
 
         mockContext = mock(Context.class);
         mockRecord = mock(Record.class);
@@ -59,15 +52,19 @@ public class WebsocketFeedRouterTests {
                 any(Schema.class))).thenReturn(mockMessageBuilder);
 
         when(mockMessageBuilder.key(anyString())).thenReturn(mockMessageBuilder);
-        when(mockMessageBuilder.value(any(RfqMatch.class))).thenReturn(mockMessageBuilder);
+        when(mockMessageBuilder.value(anyString())).thenReturn(mockMessageBuilder);
         when(mockMessageBuilder.send()).thenReturn(mockMessageId);
         when(mockRecord.getKey()).thenReturn(Optional.of("rfq_match"));
 
         router.initialize(mockContext);
         router.process(json, mockContext);
-        // Output key is the base symbol — productId without the "-QUOTE" suffix. For the
-        // test fixture product_id="Acme Rollerskates" (no dash) the whole string is used.
-        verify(mockMessageBuilder).key("Acme Rollerskates");
-        verify(mockMessageBuilder).value(match);
+
+        // Routing decision: rfq_match → mapped destination topic, Schema.STRING.
+        verify(mockContext).newOutputMessage("persistent://feeds/realtime/rfq-match", Schema.STRING);
+        // Key is the base symbol — "BTC" extracted from "BTC-USD".
+        verify(mockMessageBuilder).key("BTC");
+        // Body is the original jsonString unchanged.
+        verify(mockMessageBuilder).value(json);
+        verify(mockMessageBuilder).send();
     }
 }
