@@ -95,4 +95,32 @@ public class CoinbaseSourceTaskTest {
         assertTrue(msg.contains("\"channels\":[\"ticker\"]"));
         assertTrue(msg.contains("\"product_ids\":[\"BTC-USD\",\"ETH-USD\"]"));
     }
+
+    /**
+     * After {@link CoinbaseSourceTask#stop()}, any in-flight onClose/onError listener that
+     * fires while teardown is racing must NOT schedule another reconnect. The stopped flag
+     * gates {@code scheduleReconnect} as a short-circuit before touching the executor (which
+     * has been shut down).
+     */
+    @Test
+    public void scheduleReconnectIsNoOpAfterStop() throws Exception {
+        // Real task this time — we need the scheduledExecutorService field initialized.
+        CoinbaseSourceTask realTask = new CoinbaseSourceTask();
+        java.lang.reflect.Field cfg = CoinbaseSourceTask.class.getDeclaredField("config");
+        cfg.setAccessible(true);
+        cfg.set(realTask, new CoinbaseConnectorConfig(Map.of(
+            CoinbaseConnectorConfig.KAFKA_TOPIC, "any",
+            CoinbaseConnectorConfig.COINBASE_CHANNELS, "ticker",
+            CoinbaseConnectorConfig.COINBASE_PRODUCTS, "BTC-USD"
+        )));
+        java.lang.reflect.Field exec = CoinbaseSourceTask.class.getDeclaredField("reconnectExecutor");
+        exec.setAccessible(true);
+        exec.set(realTask, java.util.concurrent.Executors.newSingleThreadScheduledExecutor());
+
+        realTask.stop();
+
+        // scheduleReconnect() after stop should not throw and should not enqueue work
+        // (the executor was shutdownNow'd). We just verify it returns cleanly.
+        realTask.scheduleReconnect();
+    }
 }
