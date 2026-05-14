@@ -25,32 +25,38 @@ public class WebsocketFeedRouter implements Function<String, Void> {
 
         try {
             String destTopic = this.topicMap.get(feedName);
+            if (destTopic == null) {
+                LOG.debug(String.format("No destination topic mapped for feed [%s]; dropping", feedName));
+                return null;
+            }
 
+            // Parse just enough to extract product_id for the message key. Output is the
+            // original jsonString verbatim with Schema.STRING — matches the source
+            // connector's schemaType: STRING and lets downstream broker-side filters
+            // (which read Schema<byte[]>) forward the raw bytes through to their KoP
+            // consumers without schema-translation surprises.
+            String key;
             if (feedName.equalsIgnoreCase("rfq_match")) {
                 RfqMatch match = getObjectMapper().readValue(jsonString, RfqMatch.class);
-                String key = baseSymbol(match.getProduct_id());
-                LOG.info(String.format("Sending [%s] to %s (key=%s)", match, destTopic, key));
-                ctx.newOutputMessage(destTopic, Schema.JSON(RfqMatch.class))
-                        .key(key)
-                        .value(match)
-                        .send();
+                key = baseSymbol(match.getProduct_id());
+                LOG.info(String.format("Sending rfq_match [%s] to %s (key=%s)", match, destTopic, key));
             } else if (feedName.equalsIgnoreCase("ticker")) {
                 Ticker ticker = getObjectMapper().readValue(jsonString, Ticker.class);
-                String key = baseSymbol(ticker.getProduct_id());
-                LOG.info(String.format("Sending [%s] to %s (key=%s)", ticker, destTopic, key));
-                ctx.newOutputMessage(destTopic, Schema.JSON(Ticker.class))
-                        .key(key)
-                        .value(ticker)
-                        .send();
+                key = baseSymbol(ticker.getProduct_id());
+                LOG.info(String.format("Sending ticker [%s] to %s (key=%s)", ticker, destTopic, key));
             } else if (feedName.equalsIgnoreCase("auction")) {
                 Auction auction = getObjectMapper().readValue(jsonString, Auction.class);
-                String key = baseSymbol(auction.getProduct_id());
-                LOG.info(String.format("Sending [%s] to %s (key=%s)", auction, destTopic, key));
-                ctx.newOutputMessage(destTopic, Schema.JSON(Auction.class))
-                        .key(key)
-                        .value(auction)
-                        .send();
+                key = baseSymbol(auction.getProduct_id());
+                LOG.info(String.format("Sending auction [%s] to %s (key=%s)", auction, destTopic, key));
+            } else {
+                LOG.debug(String.format("Unhandled feed type [%s]; dropping", feedName));
+                return null;
             }
+
+            ctx.newOutputMessage(destTopic, Schema.STRING)
+                    .key(key)
+                    .value(jsonString)
+                    .send();
         } catch (final Exception jmEx) {
             LOG.error(String.format("Unable to process [%s] due to [%s]", jsonString, jmEx.getLocalizedMessage()), jmEx);
             jmEx.printStackTrace();
